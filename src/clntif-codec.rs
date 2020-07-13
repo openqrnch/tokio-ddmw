@@ -1,4 +1,4 @@
-use std::mem;
+use std::{cmp, mem};
 
 use bytes::{BufMut, Bytes, BytesMut};
 
