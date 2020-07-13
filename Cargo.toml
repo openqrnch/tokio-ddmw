@@ -1,0 +1,17 @@
+[package]
+name = "tokio-ddmw"
+version = "0.2.0"
+authors = ["Jan Danielsson <jan.danielsson@qrnch.com>"]
+edition = "2018"
+license = "0BSD"
+keywords = [ "tokio", "ddmw" ]
+repository = "https://github.com/openqrnch/toki-ddmw"
+description = "Library for integrating against DDMW."
+
+[dependencies]
+bytes = { version = "0.5" }
+ezmsg = { version = "0.6", features = ["bytes"] }
+futures = { version = "0.3" }
+tokio = { version = "0.2", features = ["full"] }
+tokio-util = { version= "0.3", features = ["full"] }
+
