@@ -1,3 +1,10 @@
+//! A tokio-util [`Codec`] that is used to encode and decode the DDMW client
+//! interface protocol.
+//!
+//!
+//!
+//! [`Codec`]: https://docs.rs/tokio-util/0.3/tokio_util/codec/index.html
+
 use std::{cmp, mem};
 
 use bytes::{BufMut, Bytes, BytesMut};
@@ -22,6 +29,9 @@ pub enum Input {
   Bin(BytesMut, usize)
 }
 
+
+/// The Codec (exposed externally as ClntIfCodec) is used to keep track of the
+/// state of the inbound and outbound communication.
 #[derive(Clone, Debug)]
 pub struct Codec {
   next_line_index: usize,
@@ -172,6 +182,11 @@ fn without_carriage_return(s: &[u8]) -> &[u8] {
 }
 
 
+/// The Decoder implementation of the client interface codec handles two
+/// primary states:
+///
+/// - Getting a line-based protocol.
+/// - Getting fixed-length binary data.
 impl Decoder for Codec {
   type Item = Input;
   type Error = crate::err::Error;
