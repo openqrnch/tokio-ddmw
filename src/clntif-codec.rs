@@ -152,7 +152,7 @@ impl Codec {
   /// object, and in order to call this method it must be accessed through the
   /// Framed object:
   ///
-  /// ```
+  /// ```compile_fail
   /// let mut conn = Framed::new(socket, Codec::new());
   /// // ...
   /// conn.codec_mut().expect_bin(len);

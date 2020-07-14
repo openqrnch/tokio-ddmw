@@ -1,7 +1,7 @@
 //! Utility library for creating integrations against the Data Diode
 //! Middleware.
 //!
-//! ```no_run
+//! ```compile_fail
 //! use tokio_ddmw::ClntIfCodec;
 //!
 //! async fn conn_handler(
