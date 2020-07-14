@@ -41,6 +41,12 @@ pub struct Codec {
   bin_remain: usize
 }
 
+impl Default for Codec {
+  fn default() -> Self {
+    Codec::new()
+  }
+}
+
 impl Codec {
   pub fn new() -> Codec {
     Codec {
@@ -119,7 +125,7 @@ impl Codec {
           let line = utf8(line)?;
 
           // Empty line marks end of Msg
-          if line.len() == 0 {
+          if line.is_empty() {
             // mem::take() can replace a member of a struct.
             // (This requires Default to be implemented for the object being
             // taken).
