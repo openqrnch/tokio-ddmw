@@ -38,9 +38,12 @@
 pub mod clntif_codec;
 pub mod err;
 
-pub use clntif_codec::Codec as ClntIfCodec;
-pub use err::Error;
+pub mod clntif {
+  pub use super::clntif_codec::Codec as Codec;
+  pub use super::clntif_codec::Input as Input;
+  pub use ezmsg::Msg as Msg;
+}
 
-pub use ezmsg::Msg as ClntIfMsg;
+pub use err::Error;
 
 // vim: set ft=rust et sw=2 ts=2 sts=2 cinoptions=2 tw=79 :
