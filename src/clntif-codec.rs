@@ -20,6 +20,8 @@ use tokio_util::codec::Encoder;
 
 use ezmsg::Msg;
 
+use ddmw_util::kvparam::KVParams;
+
 use crate::err::Error;
 
 #[derive(Clone,Debug)]
@@ -384,6 +386,20 @@ impl Encoder<&HashMap<String, String>> for Codec {
     }
     buf.put_u8(b'\n');
 
+    Ok(())
+  }
+}
+
+
+impl Encoder<&KVParams> for Codec {
+  type Error = io::Error;
+
+  fn encode(
+      &mut self,
+      data: &KVParams,
+      buf: &mut BytesMut
+  ) -> Result<(), io::Error> {
+    data.write_bytes(buf);
     Ok(())
   }
 }

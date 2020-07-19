@@ -1,6 +1,6 @@
 [package]
 name = "tokio-ddmw"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["Jan Danielsson <jan.danielsson@qrnch.com>"]
 edition = "2018"
 license = "0BSD"
@@ -10,6 +10,7 @@ description = "Library for integrating against DDMW."
 
 [dependencies]
 bytes = { version = "0.5" }
+ddmw-util = { version = "0.1", features = ["bytes"] }
 ezmsg = { version = "0.6", features = ["bytes"] }
 futures = { version = "0.3" }
 tokio = { version = "0.2", features = ["full"] }
