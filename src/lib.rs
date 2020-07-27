@@ -11,10 +11,10 @@
 //!   while let Some(o) = conn.next().await {
 //!     let o = o?;
 //!     match o {
-//!       Input::Msg(msg) => {
-//!         match msg.get_topic() {
+//!       Input::Telegram(tg) => {
+//!         match tg.get_topic() {
 //!           Some(t) if t == "Ok" => {
-//!             if let Some(name) = msg.get_param("Id") {
+//!             if let Some(name) = tg.get_param("Id") {
 //!               // ...
 //!             }
 //!             Some(t) if t == "Fail" => {
@@ -41,7 +41,8 @@ pub mod err;
 pub mod clntif {
   pub use super::clntif_codec::Codec as Codec;
   pub use super::clntif_codec::Input as Input;
-  pub use ezmsg::Msg as Msg;
+  pub use blather::Telegram as Telegram;
+  pub use blather::Params as Params;
 }
 
 pub use err::Error;

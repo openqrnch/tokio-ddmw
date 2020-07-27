@@ -4,7 +4,7 @@ use tokio::io;
 
 #[derive(Debug)]
 pub enum Error {
-  Msg(String),
+  Blather(String),
   IO(String),
   BadFormat(String),
   SerializeError(String)
@@ -15,7 +15,7 @@ impl std::error::Error for Error { }
 impl fmt::Display for Error {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     match &*self {
-      Error::Msg(s) => {
+      Error::Blather(s) => {
         write!(f, "Msg buffer error; {}", s)
       }
       Error::IO(s) => {
@@ -37,9 +37,9 @@ impl From<io::Error> for Error {
   }
 }
 
-impl From<ezmsg::Error> for Error {
-  fn from(err: ezmsg::Error) -> Self {
-    Error::Msg(err.to_string())
+impl From<blather::Error> for Error {
+  fn from(err: blather::Error) -> Self {
+    Error::Blather(err.to_string())
   }
 }
 

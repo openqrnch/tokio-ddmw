@@ -1,8 +1,6 @@
 //! A tokio-util [`Codec`] that is used to encode and decode the DDMW client
 //! interface protocol.
 //!
-//!
-//!
 //! [`Codec`]: https://docs.rs/tokio-util/0.3/tokio_util/codec/index.html
 
 use std::{
@@ -18,23 +16,21 @@ use tokio::io;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
-use ezmsg::Msg;
-
-use ddmw_util::kvparam::KVParams;
+use blather::{Telegram, Params};
 
 use crate::err::Error;
 
 #[derive(Clone,Debug)]
 enum CodecState {
-  Msg,
-  Binary,
-  KVParams
+  Telegram,
+  Params,
+  Binary
 }
 
 pub enum Input {
-  Msg(Msg),
-  Bin(BytesMut, usize),
-  KVParams(HashMap<String, String>)
+  Telegram(Telegram),
+  Params(Params),
+  Bin(BytesMut, usize)
 }
 
 
@@ -44,8 +40,8 @@ pub enum Input {
 pub struct Codec {
   next_line_index: usize,
   max_line_length: usize,
-  msg: Msg,
-  kvparams: HashMap<String, String>,
+  tg: Telegram,
+  params: Params,
   state: CodecState,
   bin_remain: usize
 }
@@ -61,9 +57,9 @@ impl Codec {
     Codec {
       next_line_index: 0,
       max_line_length: usize::MAX,
-      msg: Msg::new(),
-      kvparams: HashMap::new(),
-      state: CodecState::Msg,
+      tg: Telegram::new(),
+      params: Params::new(),
+      state: CodecState::Telegram,
       bin_remain: 0
     }
   }
@@ -79,22 +75,22 @@ impl Codec {
     self.max_line_length
   }
 
-  /// `decode_msg_lines` has encountered an eol, determined that the string is
-  /// longer than zero characters, and thus passed the line to this function to
-  /// process it.
+  /// `decode_telegram_lines` has encountered an eol, determined that the
+  /// string is longer than zero characters, and thus passed the line to this
+  /// function to process it.
   ///
-  /// The first line received is a message topic.  This is a required line.
+  /// The first line received is a telegram topic.  This is a required line.
   /// Following lines are parameter lines, which are a single space character
-  /// separated key/value pair.
-  fn decode_line(&mut self, line: &str) -> Result<(), Error> {
-    if self.msg.get_topic().is_none() {
-      self.msg.set_topic(line)?;
+  /// separated key/value pairs.
+  fn decode_telegram_line(&mut self, line: &str) -> Result<(), Error> {
+    if self.tg.get_topic().is_none() {
+      self.tg.set_topic(line)?;
     } else {
       let idx = line.find(' ');
       if let Some(idx) = idx {
         let (k, v) = line.split_at(idx);
         let v = &v[1..v.len()];
-        self.msg.add_param(k, v);
+        self.tg.add_param(k, v);
       }
     }
     Ok(())
@@ -102,17 +98,17 @@ impl Codec {
 
   /// (New) data is available in the input buffer.
   /// Try to parse lines until an empty line as been encountered, at which
-  /// point the buffer is parsed and returned in an [`Msg`] buffer.
+  /// point the buffer is parsed and returned in an [`Telegram`] buffer.
   ///
-  /// If the buffer doesn't contain enough data to finalize a complete message
+  /// If the buffer doesn't contain enough data to finalize a complete telegram
   /// buffer return `Ok(None)` to inform the calling FramedRead that more data
   /// is needed.
   ///
-  /// [`Msg`]: ezmsg::Msg
-  fn decode_msg_lines(
+  /// [`Telegram`]: blather::Telegram
+  fn decode_telegram_lines(
       &mut self,
       buf: &mut BytesMut
-  ) -> Result<Option<Msg>, Error> {
+  ) -> Result<Option<Telegram>, Error> {
     loop {
       // Determine how far into the buffer we'll search for a newline. If
       // there's no max_length set, we'll read to the end of the buffer.
@@ -139,9 +135,9 @@ impl Codec {
             // mem::take() can replace a member of a struct.
             // (This requires Default to be implemented for the object being
             // taken).
-            return Ok(Some(mem::take(&mut self.msg)));
+            return Ok(Some(mem::take(&mut self.tg)));
           } else {
-            self.decode_line(&line)?;
+            self.decode_telegram_line(&line)?;
           }
         }
         None if buf.len() > self.max_line_length => {
@@ -162,10 +158,10 @@ impl Codec {
   }
 
 
-  fn decode_kv_lines(
+  fn decode_params_lines(
       &mut self,
       buf: &mut BytesMut
-  ) -> Result<Option<HashMap<String, String>>, Error> {
+  ) -> Result<Option<Params>, Error> {
     loop {
       // Determine how far into the buffer we'll search for a newline. If
       // there's no max_length set, we'll read to the end of the buffer.
@@ -192,13 +188,13 @@ impl Codec {
             // mem::take() can replace a member of a struct.
             // (This requires Default to be implemented for the object being
             // taken).
-            return Ok(Some(mem::take(&mut self.kvparams)));
+            return Ok(Some(mem::take(&mut self.params)));
           } else {
             let idx = line.find(' ');
             if let Some(idx) = idx {
               let (k, v) = line.split_at(idx);
               let v = &v[1..v.len()];
-              self.msg.add_param(k, v);
+              self.params.add_param(k, v);
             }
           }
         }
@@ -241,8 +237,8 @@ impl Codec {
   }
 
   /// Tell the Decoder to expect lines of key/value pairs.
-  pub fn expect_kvparams(&mut self) {
-    self.state = CodecState::KVParams;
+  pub fn expect_params(&mut self) {
+    self.state = CodecState::Params;
   }
 }
 
@@ -279,13 +275,25 @@ impl Decoder for Codec {
     // The codec's internal decoder state denotes whether lines or binary data
     // is currently being expected.
     match self.state {
-      CodecState::Msg => {
-        // If decode_msg_lines returns Some(value) it means that a complete Msg
-        // buffer has been received.
-        let msg = self.decode_msg_lines(buf)?;
-        if let Some(msg) = msg {
-          // A complete Msg was received
-          return Ok(Some(Input::Msg(msg)));
+      CodecState::Telegram => {
+        // If decode_telegram_lines returns Some(value) it means that a
+        // complete buffer has been received.
+        let tg = self.decode_telegram_lines(buf)?;
+        if let Some(tg) = tg {
+          // A complete Telegram was received
+          return Ok(Some(Input::Telegram(tg)));
+        }
+
+        // Returning Ok(None) tells the caller that we need more data
+        Ok(None)
+      }
+      CodecState::Params => {
+        // If decode_telegram_lines returns Some(value) it means that a
+        // complete buffer has been received.
+        let params = self.decode_params_lines(buf)?;
+        if let Some(params) = params {
+          // A complete Params buffer was received
+          return Ok(Some(Input::Params(params)));
         }
 
         // Returning Ok(None) tells the caller that we need more data
@@ -299,7 +307,7 @@ impl Decoder for Codec {
           if self.bin_remain == 0 {
             // When no more data is expected for this binary part, revert to
             // expecting Msg lines
-            self.state = CodecState::Msg;
+            self.state = CodecState::Telegram;
           }
 
           // Return a buffer and the amount of data remaining, this buffer
@@ -311,60 +319,47 @@ impl Decoder for Codec {
           Ok(None)
         }
       }
-      CodecState::KVParams => {
-        // If decode_msg_lines returns Some(value) it means that a complete Msg
-        // buffer has been received.
-        let kvparams = self.decode_kv_lines(buf)?;
-        if let Some(kvparams) = kvparams {
-          // A complete Msg was received
-          return Ok(Some(Input::KVParams(kvparams)));
-        }
-
-        // Returning Ok(None) tells the caller that we need more data
-        Ok(None)
-      }
     } // match self.state
   }
 }
 
 
-impl Encoder<&Msg> for Codec {
+impl Encoder<&Telegram> for Codec {
   type Error = crate::err::Error;
 
   fn encode(
       &mut self,
-      msg: &Msg,
+      tg: &Telegram,
       buf: &mut BytesMut
   ) -> Result<(), Error> {
-    msg.encoder_write(buf)?;
+    tg.encoder_write(buf)?;
     Ok(())
   }
 }
 
 
-impl Encoder<Bytes> for Codec {
-  type Error = io::Error;
+impl Encoder<&Params> for Codec {
+  type Error = crate::err::Error;
 
   fn encode(
       &mut self,
-      data: Bytes,
+      params: &Params,
       buf: &mut BytesMut
-  ) -> Result<(), io::Error> {
-    buf.reserve(data.len());
-    buf.put(data);
+  ) -> Result<(), Error> {
+    params.encoder_write(buf)?;
     Ok(())
   }
 }
 
 
 impl Encoder<&HashMap<String, String>> for Codec {
-  type Error = io::Error;
+  type Error = crate::err::Error;
 
   fn encode(
       &mut self,
       data: &HashMap<String, String>,
       buf: &mut BytesMut
-  ) -> Result<(), io::Error> {
+  ) -> Result<(), Error> {
     // Calculate the amount of space required
     let mut sz = 0;
     for (k, v) in data.iter() {
@@ -391,15 +386,16 @@ impl Encoder<&HashMap<String, String>> for Codec {
 }
 
 
-impl Encoder<&KVParams> for Codec {
-  type Error = io::Error;
+impl Encoder<Bytes> for Codec {
+  type Error = crate::err::Error;
 
   fn encode(
       &mut self,
-      data: &KVParams,
+      data: Bytes,
       buf: &mut BytesMut
-  ) -> Result<(), io::Error> {
-    data.write_bytes(buf);
+  ) -> Result<(), crate::err::Error> {
+    buf.reserve(data.len());
+    buf.put(data);
     Ok(())
   }
 }
