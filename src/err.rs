@@ -2,12 +2,16 @@ use std::fmt;
 
 use tokio::io;
 
+use blather::Params;
+
 #[derive(Debug)]
 pub enum Error {
   Blather(String),
   IO(String),
   BadFormat(String),
-  SerializeError(String)
+  SerializeError(String),
+  ServerError(Params),
+  BadState(String)
 }
 
 impl std::error::Error for Error { }
@@ -26,6 +30,12 @@ impl fmt::Display for Error {
       }
       Error::SerializeError(s) => {
         write!(f, "Unable to serialize; {}", s)
+      }
+      Error::ServerError(p) => {
+        write!(f, "Server replied: {}", p)
+      }
+      Error::BadState(s) => {
+        write!(f, "Encountred an unexpected/bad state: {}", s)
       }
     }
   }
