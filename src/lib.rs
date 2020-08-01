@@ -45,8 +45,6 @@ pub mod err;
 pub mod clntif {
   pub use super::clntif_codec::Codec as Codec;
   pub use super::clntif_codec::Input as Input;
-  pub use blather::Telegram as Telegram;
-  pub use blather::Params as Params;
   pub use super::clntif_util::expect_okfail as expect_okfail;
 }
 
