@@ -183,8 +183,12 @@ impl Codec {
           let line = without_carriage_return(line);
           let line = utf8(line)?;
 
-          // Empty line marks end of Msg
+          // Empty line marks end of Params
           if line.is_empty() {
+            // Revert to expecting a telegram once a Params has been completed.
+            // The application can override this when needed.
+            self.state = CodecState::Telegram;
+
             // mem::take() can replace a member of a struct.
             // (This requires Default to be implemented for the object being
             // taken).
