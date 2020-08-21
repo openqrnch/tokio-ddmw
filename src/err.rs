@@ -11,32 +11,24 @@ pub enum Error {
   BadFormat(String),
   SerializeError(String),
   ServerError(Params),
-  BadState(String)
+  BadState(String),
+  InvalidSize(String)
 }
 
-impl std::error::Error for Error { }
+impl std::error::Error for Error {}
 
 impl fmt::Display for Error {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     match &*self {
-      Error::Blather(s) => {
-        write!(f, "Msg buffer error; {}", s)
-      }
-      Error::IO(s) => {
-        write!(f, "I/O error; {}", s)
-      }
-      Error::BadFormat(s) => {
-        write!(f, "Bad format; {}", s)
-      }
-      Error::SerializeError(s) => {
-        write!(f, "Unable to serialize; {}", s)
-      }
-      Error::ServerError(p) => {
-        write!(f, "Server replied: {}", p)
-      }
+      Error::Blather(s) => write!(f, "Msg buffer error; {}", s),
+      Error::IO(s) => write!(f, "I/O error; {}", s),
+      Error::BadFormat(s) => write!(f, "Bad format; {}", s),
+      Error::SerializeError(s) => write!(f, "Unable to serialize; {}", s),
+      Error::ServerError(p) => write!(f, "Server replied: {}", p),
       Error::BadState(s) => {
         write!(f, "Encountred an unexpected/bad state: {}", s)
       }
+      Error::InvalidSize(s) => write!(f, "Invalid size; {}", s)
     }
   }
 }

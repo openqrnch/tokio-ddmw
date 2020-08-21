@@ -3,11 +3,10 @@
 //!
 //! [`Codec`]: https://docs.rs/tokio-util/0.3/tokio_util/codec/index.html
 
-use std::{
-  cmp,
-  collections::HashMap,
-  mem
-};
+use std::fs::File;
+use std::io::Write;
+use std::path::PathBuf;
+use std::{cmp, collections::HashMap, mem};
 
 use bytes::{BufMut, Bytes, BytesMut};
 
@@ -16,34 +15,48 @@ use tokio::io;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
-use blather::{Telegram, Params};
+use blather::{Params, Telegram};
 
 use crate::err::Error;
 
-#[derive(Clone,Debug)]
+
+/// Current state of decover
+#[derive(Clone, Debug, PartialEq)]
 enum CodecState {
   Telegram,
   Params,
-  Binary
+  Chunks,
+  Buf,
+  File,
+  Writer,
+  Skip
 }
 
+/// Data returned to the application when the Codec's Decode iterator is
+/// called and the decoder has a complete entity to return.
 pub enum Input {
   Telegram(Telegram),
   Params(Params),
-  Bin(BytesMut, usize)
+  Chunk(BytesMut, usize),
+  Buf(BytesMut),
+  File(PathBuf),
+  WriteDone,
+  SkipDone
 }
 
 
 /// The Codec (exposed externally as ClntIfCodec) is used to keep track of the
 /// state of the inbound and outbound communication.
-#[derive(Clone, Debug)]
 pub struct Codec {
   next_line_index: usize,
   max_line_length: usize,
   tg: Telegram,
   params: Params,
   state: CodecState,
-  bin_remain: usize
+  bin_remain: usize,
+  pathname: Option<PathBuf>,
+  writer: Option<Box<dyn Write>>,
+  buf: BytesMut
 }
 
 impl Default for Codec {
@@ -60,7 +73,10 @@ impl Codec {
       tg: Telegram::new(),
       params: Params::new(),
       state: CodecState::Telegram,
-      bin_remain: 0
+      bin_remain: 0,
+      pathname: None,
+      writer: None,
+      buf: BytesMut::new()
     }
   }
 
@@ -106,14 +122,14 @@ impl Codec {
   ///
   /// [`Telegram`]: blather::Telegram
   fn decode_telegram_lines(
-      &mut self,
-      buf: &mut BytesMut
+    &mut self,
+    buf: &mut BytesMut
   ) -> Result<Option<Telegram>, Error> {
     loop {
       // Determine how far into the buffer we'll search for a newline. If
       // there's no max_length set, we'll read to the end of the buffer.
-      let read_to = cmp::min(self.max_line_length.saturating_add(1),
-          buf.len());
+      let read_to =
+        cmp::min(self.max_line_length.saturating_add(1), buf.len());
 
       let newline_offset = buf[self.next_line_index..read_to]
         .iter()
@@ -141,8 +157,9 @@ impl Codec {
           }
         }
         None if buf.len() > self.max_line_length => {
-          return Err(Error::BadFormat("Exceeded maximum line length."
-                .to_string()));
+          return Err(Error::BadFormat(
+            "Exceeded maximum line length.".to_string()
+          ));
         }
         None => {
           // We didn't find a line or reach the length limit, so the next
@@ -157,16 +174,18 @@ impl Codec {
     }
   }
 
-
+  /// Read buffer line-by-line, split each line at the first space character
+  /// and store the left part as a key and the right part as a value in a
+  /// Params structure.
   fn decode_params_lines(
-      &mut self,
-      buf: &mut BytesMut
+    &mut self,
+    buf: &mut BytesMut
   ) -> Result<Option<Params>, Error> {
     loop {
       // Determine how far into the buffer we'll search for a newline. If
       // there's no max_length set, we'll read to the end of the buffer.
-      let read_to = cmp::min(self.max_line_length.saturating_add(1),
-          buf.len());
+      let read_to =
+        cmp::min(self.max_line_length.saturating_add(1), buf.len());
 
       let newline_offset = buf[self.next_line_index..read_to]
         .iter()
@@ -203,8 +222,9 @@ impl Codec {
           }
         }
         None if buf.len() > self.max_line_length => {
-          return Err(Error::BadFormat("Exceeded maximum line length."
-                .to_string()));
+          return Err(Error::BadFormat(
+            "Exceeded maximum line length.".to_string()
+          ));
         }
         None => {
           // We didn't find a line or reach the length limit, so the next
@@ -219,10 +239,14 @@ impl Codec {
     }
   }
 
-
-  /// Called from application in order to instruct decoder that binary data is
-  /// going to be received.  The number of bytes must be supplied.
+  /// Set the decoder to treat the next `size` bytes as raw bytes.  The decoder
+  /// will return to the application each time a new chunk has been received.
+  /// In addition to the actual chunk number of bytes remaining will be
+  /// returned.  The remaining bytes value is adjusted to subtract the
+  /// currently returned chunk, which means that the application can detect the
+  /// end of the buffer by checking if the remaining value is zero.
   ///
+  /// # Notes
   /// Note that normally the Codec object is hidden inside a [`Framed`]
   /// object, and in order to call this method it must be accessed through the
   /// Framed object:
@@ -230,27 +254,93 @@ impl Codec {
   /// ```compile_fail
   /// let mut conn = Framed::new(socket, Codec::new());
   /// // ...
-  /// conn.codec_mut().expect_bin(len);
+  /// conn.codec_mut().expect_chunks(len);
   /// ```
   ///
   /// [`Framed`]: https://docs.rs/tokio-util/0.3/tokio_util/codec/struct.Framed.html
-  pub fn expect_bin(&mut self, size: usize) {
+  pub fn expect_chunks(&mut self, size: usize) {
     //println!("Expecting bin {}", size);
-    self.state = CodecState::Binary;
+    self.state = CodecState::Chunks;
     self.bin_remain = size;
   }
+
+  /// Expect a buffer of a certain size to be received.
+  /// The returned buffer will be stored in process memory.
+  ///
+  /// # To Do
+  /// - Return an error if size is 0.
+  pub fn expect_buf(&mut self, size: usize) -> Result<(), Error> {
+    if size == 0 {
+      return Err(Error::InvalidSize("The size must not be zero".to_string()));
+    }
+    self.state = CodecState::Buf;
+    self.bin_remain = size;
+    self.buf = BytesMut::with_capacity(size);
+    Ok(())
+  }
+
+  /// Called from application that expects a certain amount of bytes of data to
+  /// arrive from the peer, and that data should be stored to a file.
+  pub fn expect_file<P: Into<PathBuf>>(
+    &mut self,
+    pathname: P,
+    size: usize
+  ) -> Result<(), Error> {
+    if size == 0 {
+      return Err(Error::InvalidSize("The size must not be zero".to_string()));
+    }
+    self.state = CodecState::File;
+    let pathname = pathname.into();
+    self.writer = Some(Box::new(File::create(&pathname)?));
+    self.pathname = Some(pathname);
+
+    self.bin_remain = size;
+
+    Ok(())
+  }
+
+  /// Called from an application to request that data should be written to a
+  /// supplied writer.
+  ///
+  /// ToDo: File should use some appropriate writer trait.
+  pub fn expect_writer<W: 'static + Write>(
+    &mut self,
+    writer: W,
+    size: usize
+  ) -> Result<(), Error> {
+    if size == 0 {
+      return Err(Error::InvalidSize("The size must not be zero".to_string()));
+    }
+    self.state = CodecState::Writer;
+    self.writer = Some(Box::new(writer));
+    self.bin_remain = size;
+    Ok(())
+  }
+
 
   /// Tell the Decoder to expect lines of key/value pairs.
   pub fn expect_params(&mut self) {
     self.state = CodecState::Params;
   }
+
+  /// Skip bytes.
+  pub fn skip(&mut self, size: usize) -> Result<(), Error> {
+    if size == 0 {
+      return Err(Error::InvalidSize("The size must not be zero".to_string()));
+    }
+    self.state = CodecState::Skip;
+    self.bin_remain = size;
+    Ok(())
+  }
 }
 
-
 fn utf8(buf: &[u8]) -> Result<&str, io::Error> {
-  std::str::from_utf8(buf)
-    .map_err(|_| io::Error::new(io::ErrorKind::InvalidData,
-          "Unable to decode input as UTF8"))
+  std::str::from_utf8(buf).map_err(|_| {
+    io::Error::new(
+      io::ErrorKind::InvalidData,
+      "Unable to decode input as UTF8"
+    )
+  })
 }
 
 fn without_carriage_return(s: &[u8]) -> &[u8] {
@@ -271,11 +361,7 @@ impl Decoder for Codec {
   type Item = Input;
   type Error = crate::err::Error;
 
-  fn decode(
-      &mut self,
-      buf: &mut BytesMut
-  ) -> Result<Option<Input>, Error> {
-
+  fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Input>, Error> {
     // The codec's internal decoder state denotes whether lines or binary data
     // is currently being expected.
     match self.state {
@@ -303,26 +389,116 @@ impl Decoder for Codec {
         // Returning Ok(None) tells the caller that we need more data
         Ok(None)
       }
-      CodecState::Binary => {
-        if !buf.is_empty() {
-          let read_to = cmp::min(self.bin_remain, buf.len());
-
-          self.bin_remain -= read_to;
-          if self.bin_remain == 0 {
-            // When no more data is expected for this binary part, revert to
-            // expecting Msg lines
-            self.state = CodecState::Telegram;
-          }
-
-          // Return a buffer and the amount of data remaining, this buffer
-          // included.  The application can check if remain is 0 to determine
-          // if it has received all the expected binary data.
-          Ok(Some(Input::Bin(buf.split_to(read_to), self.bin_remain)))
-        } else {
+      CodecState::Chunks => {
+        if buf.is_empty() {
           // Need more data
-          Ok(None)
+          return Ok(None);
         }
+
+        let read_to = cmp::min(self.bin_remain, buf.len());
+        self.bin_remain -= read_to;
+
+        if self.bin_remain == 0 {
+          // When no more data is expected for this binary part, revert to
+          // expecting Msg lines
+          self.state = CodecState::Telegram;
+        }
+
+        // Return a buffer and the amount of data remaining, this buffer
+        // included.  The application can check if remain is 0 to determine
+        // if it has received all the expected binary data.
+        Ok(Some(Input::Chunk(buf.split_to(read_to), self.bin_remain)))
       }
+      CodecState::Buf => {
+        if buf.is_empty() {
+          // Need more data
+          return Ok(None);
+        }
+        let read_to = cmp::min(self.bin_remain, buf.len());
+
+        // Transfer data from input to output buffer
+        self.buf.put(buf.split_to(read_to));
+
+        self.bin_remain -= read_to;
+        if self.bin_remain != 0 {
+          // Need more data
+          return Ok(None);
+        }
+
+        // When no more data is expected for this binary part, revert to
+        // expecting Msg lines
+        self.state = CodecState::Telegram;
+
+        // Return a buffer and the amount of data remaining, this buffer
+        // included.  The application can check if remain is 0 to determine
+        // if it has received all the expected binary data.
+        Ok(Some(Input::Buf(mem::take(&mut self.buf))))
+      }
+      CodecState::File | CodecState::Writer => {
+        if buf.is_empty() {
+          return Ok(None); // Need more data
+        }
+
+        // Read as much data as available or requested and write it to our
+        // output.
+        let read_to = cmp::min(self.bin_remain, buf.len());
+        if let Some(ref mut f) = self.writer {
+          f.write_all(&buf.split_to(read_to))?;
+        }
+
+        self.bin_remain -= read_to;
+        if self.bin_remain != 0 {
+          return Ok(None); // Need more data
+        }
+
+        // At this point the entire expected buffer has been received
+
+        // Close file
+        self.writer = None;
+
+        // Return a buffer and the amount of data remaining, this buffer
+        // included.  The application can check if remain is 0 to determine
+        // if it has received all the expected binary data.
+        let ret = if self.state == CodecState::File {
+          let pathname = if let Some(ref fname) = self.pathname {
+            fname.clone()
+          } else {
+            return Err(Error::BadState("Missing pathname".to_string()));
+          };
+
+          // Reset the pathname
+          self.pathname = None;
+
+          Input::File(pathname)
+        } else {
+          Input::WriteDone
+        };
+
+        // Revert to the default of expecting a telegram.
+        self.state = CodecState::Telegram;
+
+        Ok(Some(ret))
+      } // CodecState::{File|Writer}
+      CodecState::Skip => {
+        if buf.is_empty() {
+          return Ok(None); // Need more data
+        }
+
+        // Read as much data as available or requested and write it to our
+        // output.
+        let read_to = cmp::min(self.bin_remain, buf.len());
+        let _ = buf.split_to(read_to);
+
+        self.bin_remain -= read_to;
+        if self.bin_remain != 0 {
+          return Ok(None); // Need more data
+        }
+
+        // Revert to the default of expecting a telegram.
+        self.state = CodecState::Telegram;
+
+        Ok(Some(Input::SkipDone))
+      } // CodecState::Skip
     } // match self.state
   }
 }
@@ -332,9 +508,9 @@ impl Encoder<&Telegram> for Codec {
   type Error = crate::err::Error;
 
   fn encode(
-      &mut self,
-      tg: &Telegram,
-      buf: &mut BytesMut
+    &mut self,
+    tg: &Telegram,
+    buf: &mut BytesMut
   ) -> Result<(), Error> {
     tg.encoder_write(buf)?;
     Ok(())
@@ -346,9 +522,9 @@ impl Encoder<&Params> for Codec {
   type Error = crate::err::Error;
 
   fn encode(
-      &mut self,
-      params: &Params,
-      buf: &mut BytesMut
+    &mut self,
+    params: &Params,
+    buf: &mut BytesMut
   ) -> Result<(), Error> {
     params.encoder_write(buf)?;
     Ok(())
@@ -360,9 +536,9 @@ impl Encoder<&HashMap<String, String>> for Codec {
   type Error = crate::err::Error;
 
   fn encode(
-      &mut self,
-      data: &HashMap<String, String>,
-      buf: &mut BytesMut
+    &mut self,
+    data: &HashMap<String, String>,
+    buf: &mut BytesMut
   ) -> Result<(), Error> {
     // Calculate the amount of space required
     let mut sz = 0;
@@ -394,9 +570,9 @@ impl Encoder<Bytes> for Codec {
   type Error = crate::err::Error;
 
   fn encode(
-      &mut self,
-      data: Bytes,
-      buf: &mut BytesMut
+    &mut self,
+    data: Bytes,
+    buf: &mut BytesMut
   ) -> Result<(), crate::err::Error> {
     buf.reserve(data.len());
     buf.put(data);

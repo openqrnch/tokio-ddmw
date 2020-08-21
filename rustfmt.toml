@@ -1,0 +1,13 @@
+blank_lines_upper_bound = 2
+comment_width = 79
+edition = "2018"
+#force_multiline_blocks = true
+format_strings = true
+max_width = 79
+match_block_trailing_comma = false
+tab_spaces = 2
+trailing_comma = "Never"
+unstable_features = true
+wrap_comments = true
+#reorder_imports = false
+#reorder_modules = false

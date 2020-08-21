@@ -34,18 +34,18 @@
 //! }
 //! ```
 
-#[path="clntif-codec.rs"]
+#[path = "clntif-codec.rs"]
 pub mod clntif_codec;
 
-#[path="clntif-util.rs"]
+#[path = "clntif-util.rs"]
 pub mod clntif_util;
 
 pub mod err;
 
 pub mod clntif {
-  pub use super::clntif_codec::Codec as Codec;
-  pub use super::clntif_codec::Input as Input;
-  pub use super::clntif_util::expect_okfail as expect_okfail;
+  pub use super::clntif_codec::Codec;
+  pub use super::clntif_codec::Input;
+  pub use super::clntif_util::expect_okfail;
 }
 
 pub use err::Error;
