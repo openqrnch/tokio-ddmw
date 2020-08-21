@@ -3,6 +3,7 @@
 //!
 //! [`Codec`]: https://docs.rs/tokio-util/0.3/tokio_util/codec/index.html
 
+use std::fmt;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
@@ -57,6 +58,12 @@ pub struct Codec {
   pathname: Option<PathBuf>,
   writer: Option<Box<dyn Write>>,
   buf: BytesMut
+}
+
+impl fmt::Debug for Codec {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.debug_struct("Codec").field("state", &self.state).finish()
+  }
 }
 
 impl Default for Codec {
