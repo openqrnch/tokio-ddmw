@@ -16,7 +16,7 @@ use tokio::io;
 use tokio_util::codec::Decoder;
 use tokio_util::codec::Encoder;
 
-use blather::{Params, Telegram};
+use blather::{KVLines, Params, Telegram};
 
 use crate::err::Error;
 
@@ -26,6 +26,7 @@ use crate::err::Error;
 enum CodecState {
   Telegram,
   Params,
+  KVLines,
   Chunks,
   Buf,
   File,
@@ -37,6 +38,7 @@ enum CodecState {
 /// called and the decoder has a complete entity to return.
 pub enum Input {
   Telegram(Telegram),
+  KVLines(KVLines),
   Params(Params),
   Chunk(BytesMut, usize),
   Buf(BytesMut),
@@ -53,6 +55,7 @@ pub struct Codec {
   max_line_length: usize,
   tg: Telegram,
   params: Params,
+  kvlines: KVLines,
   state: CodecState,
   bin_remain: usize,
   pathname: Option<PathBuf>,
@@ -72,6 +75,20 @@ impl Default for Codec {
   }
 }
 
+
+/// A Codec used to encode and decode the DDMW client interface protocol.
+///
+/// # Notes
+/// Normally the Codec object is hidden inside a [`Framed`] object. In order to
+/// call methods in the codec it must be accessed through the Framed object:
+///
+/// ```compile_fail
+/// let mut conn = Framed::new(socket, Codec::new());
+/// // ...
+/// conn.codec_mut().expect_chunks(len);
+/// ```
+///
+/// [`Framed`]: https://docs.rs/tokio-util/0.3/tokio_util/codec/struct.Framed.html
 impl Codec {
   pub fn new() -> Codec {
     Codec {
@@ -79,6 +96,7 @@ impl Codec {
       max_line_length: usize::MAX,
       tg: Telegram::new(),
       params: Params::new(),
+      kvlines: KVLines::new(),
       state: CodecState::Telegram,
       bin_remain: 0,
       pathname: None,
@@ -246,25 +264,80 @@ impl Codec {
     }
   }
 
-  /// Set the decoder to treat the next `size` bytes as raw bytes.  The decoder
-  /// will return to the application each time a new chunk has been received.
-  /// In addition to the actual chunk number of bytes remaining will be
-  /// returned.  The remaining bytes value is adjusted to subtract the
-  /// currently returned chunk, which means that the application can detect the
-  /// end of the buffer by checking if the remaining value is zero.
+  fn decode_kvlines(
+    &mut self,
+    buf: &mut BytesMut
+  ) -> Result<Option<KVLines>, Error> {
+    loop {
+      // Determine how far into the buffer we'll search for a newline. If
+      // there's no max_length set, we'll read to the end of the buffer.
+      let read_to =
+        cmp::min(self.max_line_length.saturating_add(1), buf.len());
+
+      let newline_offset = buf[self.next_line_index..read_to]
+        .iter()
+        .position(|b| *b == b'\n');
+
+      match newline_offset {
+        Some(offset) => {
+          // Found an eol
+          let newline_index = offset + self.next_line_index;
+          self.next_line_index = 0;
+          let line = buf.split_to(newline_index + 1);
+          //println!("buf remain: {}", buf.len());
+          let line = &line[..line.len() - 1];
+          let line = without_carriage_return(line);
+          let line = utf8(line)?;
+
+          // Empty line marks end of Params
+          if line.is_empty() {
+            // Revert to expecting a telegram once a KVLines  has been
+            // completed.
+            // The application can override this when needed.
+            self.state = CodecState::Telegram;
+
+            // mem::take() can replace a member of a struct.
+            // (This requires Default to be implemented for the object being
+            // taken).
+            return Ok(Some(mem::take(&mut self.kvlines)));
+          } else {
+            let idx = line.find(' ');
+            if let Some(idx) = idx {
+              let (k, v) = line.split_at(idx);
+              let v = &v[1..v.len()];
+              self.kvlines.append(k, v);
+            }
+          }
+        }
+        None if buf.len() > self.max_line_length => {
+          return Err(Error::BadFormat(
+            "Exceeded maximum line length.".to_string()
+          ));
+        }
+        None => {
+          // We didn't find a line or reach the length limit, so the next
+          // call will resume searching at the current offset.
+          self.next_line_index = read_to;
+
+          // Returning Ok(None) instructs the FramedRead that more data is
+          // needed.
+          return Ok(None);
+        }
+      }
+    }
+  }
+
+
+  /// Set the decoder to treat the next `size` bytes as raw bytes to be
+  /// received in chunks.
   ///
-  /// # Notes
-  /// Note that normally the Codec object is hidden inside a [`Framed`]
-  /// object, and in order to call this method it must be accessed through the
-  /// Framed object:
-  ///
-  /// ```compile_fail
-  /// let mut conn = Framed::new(socket, Codec::new());
-  /// // ...
-  /// conn.codec_mut().expect_chunks(len);
-  /// ```
-  ///
-  /// [`Framed`]: https://docs.rs/tokio-util/0.3/tokio_util/codec/struct.Framed.html
+  /// # Decoder behavior
+  /// The decoder will return an `Input::Chunk(buf, remain)` to the application
+  /// each time a new chunk has been received. In addition to the actual
+  /// chunk number of bytes remaining will be returned.  The remaining bytes
+  /// value is adjusted to subtract the currently returned chunk, which means
+  /// that the application can detect the end of the buffer by checking if
+  /// the remaining value is zero.
   pub fn expect_chunks(&mut self, size: usize) {
     //println!("Expecting bin {}", size);
     self.state = CodecState::Chunks;
@@ -274,8 +347,13 @@ impl Codec {
   /// Expect a buffer of a certain size to be received.
   /// The returned buffer will be stored in process memory.
   ///
-  /// # To Do
-  /// - Return an error if size is 0.
+  /// # Decoder behavior
+  /// One a complete buffer has been successfully reaceived the `Decoder` will
+  /// return an `Input::Buf(b)` where `b` is a `bytes::BytesMut` containing the
+  /// entire buffer.
+  ///
+  /// Once the entire buffer has been received by the `Decoder` it will revert
+  /// to expect an `Input::Telegram`.
   pub fn expect_buf(&mut self, size: usize) -> Result<(), Error> {
     if size == 0 {
       return Err(Error::InvalidSize("The size must not be zero".to_string()));
@@ -288,6 +366,12 @@ impl Codec {
 
   /// Called from application that expects a certain amount of bytes of data to
   /// arrive from the peer, and that data should be stored to a file.
+  ///
+  /// # Decoder behavior
+  /// On successful completion the Decoder will return an Input::File(pathname)
+  /// once the entire file length has successfully been received, where the
+  /// pathname is a PathBuf which matches the pathname parameter passed to
+  /// this function.
   pub fn expect_file<P: Into<PathBuf>>(
     &mut self,
     pathname: P,
@@ -309,7 +393,16 @@ impl Codec {
   /// Called from an application to request that data should be written to a
   /// supplied writer.
   ///
-  /// ToDo: File should use some appropriate writer trait.
+  /// The writer's ownership will be transferred to the `Decoder` and will
+  /// automatically be dropped once the entire buffer has been written.
+  ///
+  /// # Decoder behavior
+  /// On successful completion the Decoder will return an Input::WriteDone to
+  /// signal that the entire buffer has been received and written to the
+  /// `Writer`.
+  ///
+  /// Once the complete `Params` buffer has been received the Decoder will
+  /// revert back to waiting for a `Telegram`.
   pub fn expect_writer<W: 'static + Write>(
     &mut self,
     writer: W,
@@ -324,13 +417,36 @@ impl Codec {
     Ok(())
   }
 
-
   /// Tell the Decoder to expect lines of key/value pairs.
+  ///
+  /// # Decoder behavior
+  /// On successful completion the Framed StreamExt next() will return an
+  /// Input::Params(params) once a complete `Params` buffer has been received.
+  ///
+  /// Once the complete `Params` buffer has been received the Decoder will
+  /// revert back to waiting for a `Telegram`.
   pub fn expect_params(&mut self) {
     self.state = CodecState::Params;
   }
 
+  /// Tell the Decoder to expect lines ordered key/value pairs.
+  ///
+  /// # Decoder behavior
+  /// On successful completion the Framed StreamExt next() will return an
+  /// Input::KVLines(kvlines) once a complete `KVLines` buffer has been
+  /// received.
+  ///
+  /// Once the complete `KVLines` buffer has been received the Decoder will
+  /// revert back to waiting for a `Telegram`.
+  pub fn expect_kvlines(&mut self) {
+    self.state = CodecState::KVLines;
+  }
+
   /// Skip bytes.
+  ///
+  /// # Decoder behavior
+  /// Simply ignore the number of specified bytes, then revert back to waiting
+  /// for a Telegram.
   pub fn skip(&mut self, size: usize) -> Result<(), Error> {
     if size == 0 {
       return Err(Error::InvalidSize("The size must not be zero".to_string()));
@@ -359,11 +475,12 @@ fn without_carriage_return(s: &[u8]) -> &[u8] {
 }
 
 
-/// The Decoder implementation of the client interface codec handles two
-/// primary states:
+/// A Decoder implementation that is used to assist in decoding data arriving
+/// over a DDM client interface.
 ///
-/// - Getting a line-based protocol.
-/// - Getting fixed-length binary data.
+/// The default behavior for the Decoder is to wait for a Telegram buffer.  It
+/// will, on success, return an `Input::Telegram(tg)`, where `tg` is a
+/// `blather::Telegram` object.
 impl Decoder for Codec {
   type Item = Input;
   type Error = crate::err::Error;
@@ -396,6 +513,19 @@ impl Decoder for Codec {
         // Returning Ok(None) tells the caller that we need more data
         Ok(None)
       }
+      CodecState::KVLines => {
+        // If decode_telegram_lines returns Some(value) it means that a
+        // complete buffer has been received.
+        let kvlines = self.decode_kvlines(buf)?;
+        if let Some(kvlines) = kvlines {
+          // A complete Params buffer was received
+          return Ok(Some(Input::KVLines(kvlines)));
+        }
+
+        // Returning Ok(None) tells the caller that we need more data
+        Ok(None)
+      }
+
       CodecState::Chunks => {
         if buf.is_empty() {
           // Need more data
@@ -568,6 +698,20 @@ impl Encoder<&HashMap<String, String>> for Codec {
     }
     buf.put_u8(b'\n');
 
+    Ok(())
+  }
+}
+
+
+impl Encoder<&KVLines> for Codec {
+  type Error = crate::err::Error;
+
+  fn encode(
+    &mut self,
+    kvlines: &KVLines,
+    buf: &mut BytesMut
+  ) -> Result<(), Error> {
+    kvlines.encoder_write(buf)?;
     Ok(())
   }
 }
