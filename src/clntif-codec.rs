@@ -59,7 +59,7 @@ pub struct Codec {
   state: CodecState,
   bin_remain: usize,
   pathname: Option<PathBuf>,
-  writer: Option<Box<dyn Write>>,
+  writer: Option<Box<dyn Write + Send + Sync>>,
   buf: BytesMut
 }
 
@@ -403,7 +403,7 @@ impl Codec {
   ///
   /// Once the complete `Params` buffer has been received the Decoder will
   /// revert back to waiting for a `Telegram`.
-  pub fn expect_writer<W: 'static + Write>(
+  pub fn expect_writer<W: 'static + Write + Send + Sync>(
     &mut self,
     writer: W,
     size: usize
