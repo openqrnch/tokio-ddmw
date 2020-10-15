@@ -12,6 +12,6 @@ description = "Library for integrating clients against DDMW."
 blather = { version = "0.3", features = ["bytes"] }
 bytes = { version = "0.5" }
 futures = { version = "0.3" }
-tokio = { version = "0.2", features = ["full"] }
-tokio-util = { version= "0.3", features = ["full"] }
+tokio = { version = "0.3", features = ["full"] }
+tokio-util = { version= "0.4", features = ["full"] }
 
