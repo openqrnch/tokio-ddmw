@@ -145,7 +145,7 @@ impl Codec {
       if let Some(idx) = idx {
         let (k, v) = line.split_at(idx);
         let v = &v[1..v.len()];
-        self.tg.add_param(k, v);
+        self.tg.add_param(k, v)?;
       }
     }
     Ok(())
@@ -272,7 +272,7 @@ impl Codec {
           if let Some(idx) = idx {
             let (k, v) = line.split_at(idx);
             let v = &v[1..v.len()];
-            self.params.add_param(k, v);
+            self.params.add_param(k, v)?;
           }
         }
       } else {

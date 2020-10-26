@@ -25,11 +25,11 @@ pub async fn authenticate(
 
   match auth {
     Auth::AccPass(acc, pass) => {
-      tg.add_param("AccName", acc);
-      tg.add_param("Pass", pass);
+      tg.add_param("AccName", acc)?;
+      tg.add_param("Pass", pass)?;
     }
     Auth::Token(tkn) => {
-      tg.add_param("Tkn", tkn);
+      tg.add_param("Tkn", tkn)?;
     }
   }
 
