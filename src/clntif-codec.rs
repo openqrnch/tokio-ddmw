@@ -21,7 +21,8 @@ use blather::{KVLines, Params, Telegram};
 use crate::err::Error;
 
 
-/// Current state of decover
+/// Current state of decoder
+/// Controls what, if anything, will be returned to the application.
 #[derive(Clone, Debug, PartialEq)]
 enum CodecState {
   Telegram,
@@ -116,6 +117,19 @@ impl Codec {
     self.max_line_length
   }
 
+
+  /// Determine how far into the buffer we'll search for a newline. If
+  /// there's no max_length set, we'll read to the end of the buffer.
+  fn find_newline(&self, buf: &BytesMut) -> (usize, Option<usize>) {
+    let read_to = cmp::min(self.max_line_length.saturating_add(1), buf.len());
+    let newline_offset = buf[self.next_line_index..read_to]
+      .iter()
+      .position(|b| *b == b'\n');
+
+    (read_to, newline_offset)
+  }
+
+
   /// `decode_telegram_lines` has encountered an eol, determined that the
   /// string is longer than zero characters, and thus passed the line to this
   /// function to process it.
@@ -137,6 +151,61 @@ impl Codec {
     Ok(())
   }
 
+  fn getline_owned(
+    &mut self,
+    buf: &mut BytesMut
+  ) -> Result<Option<String>, Error> {
+    let (read_to, newline_offset) = self.find_newline(&buf);
+    match newline_offset {
+      Some(offset) => {
+        // Found an eol
+        let newline_index = offset + self.next_line_index;
+        self.next_line_index = 0;
+        let line = buf.split_to(newline_index + 1);
+        let line = &line[..line.len() - 1];
+        let line = utf8(without_carriage_return(line))?;
+
+        Ok(Some(line.to_owned()))
+      }
+      None if buf.len() > self.max_line_length => Err(Error::BadFormat(
+        "Exceeded maximum line length.".to_string()
+      )),
+      None => {
+        // We didn't find a line or reach the length limit, so the next
+        // call will resume searching at the current offset.
+        self.next_line_index = read_to;
+
+        // Returning Ok(None) instructs the FramedRead that more data is
+        // needed.
+        Ok(None)
+      }
+    }
+  }
+
+  fn get_eol_idx(&mut self, buf: &BytesMut) -> Result<Option<usize>, Error> {
+    let (read_to, newline_offset) = self.find_newline(&buf);
+    match newline_offset {
+      Some(offset) => {
+        // Found an eol
+        let newline_index = offset + self.next_line_index;
+        self.next_line_index = 0;
+        Ok(Some(newline_index + 1))
+      }
+      None if buf.len() > self.max_line_length => Err(Error::BadFormat(
+        "Exceeded maximum line length.".to_string()
+      )),
+      None => {
+        // Didn't find a line or reach the length limit, so the next
+        // call will resume searching at the current offset.
+        self.next_line_index = read_to;
+
+        // Returning Ok(None) instructs the FramedRead that more data is
+        // needed.
+        Ok(None)
+      }
+    }
+  }
+
   /// (New) data is available in the input buffer.
   /// Try to parse lines until an empty line as been encountered, at which
   /// point the buffer is parsed and returned in an [`Telegram`] buffer.
@@ -151,53 +220,28 @@ impl Codec {
     buf: &mut BytesMut
   ) -> Result<Option<Telegram>, Error> {
     loop {
-      // Determine how far into the buffer we'll search for a newline. If
-      // there's no max_length set, we'll read to the end of the buffer.
-      let read_to =
-        cmp::min(self.max_line_length.saturating_add(1), buf.len());
+      if let Some(idx) = self.get_eol_idx(buf)? {
+        let line = buf.split_to(idx);
+        let line = &line[..line.len() - 1];
+        let line = utf8(without_carriage_return(line))?;
 
-      let newline_offset = buf[self.next_line_index..read_to]
-        .iter()
-        .position(|b| *b == b'\n');
-
-      match newline_offset {
-        Some(offset) => {
-          // Found an eol
-          let newline_index = offset + self.next_line_index;
-          self.next_line_index = 0;
-          let line = buf.split_to(newline_index + 1);
-          //println!("buf remain: {}", buf.len());
-          let line = &line[..line.len() - 1];
-          let line = without_carriage_return(line);
-          let line = utf8(line)?;
-
-          // Empty line marks end of Msg
-          if line.is_empty() {
-            // mem::take() can replace a member of a struct.
-            // (This requires Default to be implemented for the object being
-            // taken).
-            return Ok(Some(mem::take(&mut self.tg)));
-          } else {
-            self.decode_telegram_line(&line)?;
-          }
+        // Empty line marks end of Telegram
+        if line.is_empty() {
+          // mem::take() can replace a member of a struct.
+          // (This requires Default to be implemented for the object being
+          // taken).
+          return Ok(Some(mem::take(&mut self.tg)));
+        } else {
+          self.decode_telegram_line(&line)?;
         }
-        None if buf.len() > self.max_line_length => {
-          return Err(Error::BadFormat(
-            "Exceeded maximum line length.".to_string()
-          ));
-        }
-        None => {
-          // We didn't find a line or reach the length limit, so the next
-          // call will resume searching at the current offset.
-          self.next_line_index = read_to;
-
-          // Returning Ok(None) instructs the FramedRead that more data is
-          // needed.
-          return Ok(None);
-        }
+      } else {
+        // Returning Ok(None) instructs the FramedRead that more data is
+        // needed.
+        return Ok(None);
       }
     }
   }
+
 
   /// Read buffer line-by-line, split each line at the first space character
   /// and store the left part as a key and the right part as a value in a
@@ -207,59 +251,33 @@ impl Codec {
     buf: &mut BytesMut
   ) -> Result<Option<Params>, Error> {
     loop {
-      // Determine how far into the buffer we'll search for a newline. If
-      // there's no max_length set, we'll read to the end of the buffer.
-      let read_to =
-        cmp::min(self.max_line_length.saturating_add(1), buf.len());
+      if let Some(idx) = self.get_eol_idx(buf)? {
+        // Found an eol
+        let line = buf.split_to(idx);
+        let line = &line[..line.len() - 1];
+        let line = utf8(without_carriage_return(line))?;
 
-      let newline_offset = buf[self.next_line_index..read_to]
-        .iter()
-        .position(|b| *b == b'\n');
+        // Empty line marks end of Params
+        if line.is_empty() {
+          // Revert to expecting a telegram once a Params has been completed.
+          // The application can override this when needed.
+          self.state = CodecState::Telegram;
 
-      match newline_offset {
-        Some(offset) => {
-          // Found an eol
-          let newline_index = offset + self.next_line_index;
-          self.next_line_index = 0;
-          let line = buf.split_to(newline_index + 1);
-          //println!("buf remain: {}", buf.len());
-          let line = &line[..line.len() - 1];
-          let line = without_carriage_return(line);
-          let line = utf8(line)?;
-
-          // Empty line marks end of Params
-          if line.is_empty() {
-            // Revert to expecting a telegram once a Params has been completed.
-            // The application can override this when needed.
-            self.state = CodecState::Telegram;
-
-            // mem::take() can replace a member of a struct.
-            // (This requires Default to be implemented for the object being
-            // taken).
-            return Ok(Some(mem::take(&mut self.params)));
-          } else {
-            let idx = line.find(' ');
-            if let Some(idx) = idx {
-              let (k, v) = line.split_at(idx);
-              let v = &v[1..v.len()];
-              self.params.add_param(k, v);
-            }
+          // mem::take() can replace a member of a struct.
+          // (This requires Default to be implemented for the object being
+          // taken).
+          return Ok(Some(mem::take(&mut self.params)));
+        } else {
+          let idx = line.find(' ');
+          if let Some(idx) = idx {
+            let (k, v) = line.split_at(idx);
+            let v = &v[1..v.len()];
+            self.params.add_param(k, v);
           }
         }
-        None if buf.len() > self.max_line_length => {
-          return Err(Error::BadFormat(
-            "Exceeded maximum line length.".to_string()
-          ));
-        }
-        None => {
-          // We didn't find a line or reach the length limit, so the next
-          // call will resume searching at the current offset.
-          self.next_line_index = read_to;
-
-          // Returning Ok(None) instructs the FramedRead that more data is
-          // needed.
-          return Ok(None);
-        }
+      } else {
+        // Need more data
+        return Ok(None);
       }
     }
   }
@@ -269,60 +287,34 @@ impl Codec {
     buf: &mut BytesMut
   ) -> Result<Option<KVLines>, Error> {
     loop {
-      // Determine how far into the buffer we'll search for a newline. If
-      // there's no max_length set, we'll read to the end of the buffer.
-      let read_to =
-        cmp::min(self.max_line_length.saturating_add(1), buf.len());
+      if let Some(idx) = self.get_eol_idx(buf)? {
+        // Found an eol
+        let line = buf.split_to(idx);
+        let line = &line[..line.len() - 1];
+        let line = utf8(without_carriage_return(line))?;
 
-      let newline_offset = buf[self.next_line_index..read_to]
-        .iter()
-        .position(|b| *b == b'\n');
+        // Empty line marks end of Params
+        if line.is_empty() {
+          // Revert to expecting a telegram once a KVLines  has been
+          // completed.
+          // The application can override this when needed.
+          self.state = CodecState::Telegram;
 
-      match newline_offset {
-        Some(offset) => {
-          // Found an eol
-          let newline_index = offset + self.next_line_index;
-          self.next_line_index = 0;
-          let line = buf.split_to(newline_index + 1);
-          //println!("buf remain: {}", buf.len());
-          let line = &line[..line.len() - 1];
-          let line = without_carriage_return(line);
-          let line = utf8(line)?;
-
-          // Empty line marks end of Params
-          if line.is_empty() {
-            // Revert to expecting a telegram once a KVLines  has been
-            // completed.
-            // The application can override this when needed.
-            self.state = CodecState::Telegram;
-
-            // mem::take() can replace a member of a struct.
-            // (This requires Default to be implemented for the object being
-            // taken).
-            return Ok(Some(mem::take(&mut self.kvlines)));
-          } else {
-            let idx = line.find(' ');
-            if let Some(idx) = idx {
-              let (k, v) = line.split_at(idx);
-              let v = &v[1..v.len()];
-              self.kvlines.append(k, v);
-            }
+          // mem::take() can replace a member of a struct.
+          // (This requires Default to be implemented for the object being
+          // taken).
+          return Ok(Some(mem::take(&mut self.kvlines)));
+        } else {
+          let idx = line.find(' ');
+          if let Some(idx) = idx {
+            let (k, v) = line.split_at(idx);
+            let v = &v[1..v.len()];
+            self.kvlines.append(k, v);
           }
         }
-        None if buf.len() > self.max_line_length => {
-          return Err(Error::BadFormat(
-            "Exceeded maximum line length.".to_string()
-          ));
-        }
-        None => {
-          // We didn't find a line or reach the length limit, so the next
-          // call will resume searching at the current offset.
-          self.next_line_index = read_to;
-
-          // Returning Ok(None) instructs the FramedRead that more data is
-          // needed.
-          return Ok(None);
-        }
+      } else {
+        // Need more data
+        return Ok(None);
       }
     }
   }
@@ -537,7 +529,7 @@ impl Decoder for Codec {
 
         if self.bin_remain == 0 {
           // When no more data is expected for this binary part, revert to
-          // expecting Msg lines
+          // expecting Telegram lines
           self.state = CodecState::Telegram;
         }
 
@@ -563,7 +555,7 @@ impl Decoder for Codec {
         }
 
         // When no more data is expected for this binary part, revert to
-        // expecting Msg lines
+        // expecting Telegram lines
         self.state = CodecState::Telegram;
 
         // Return a buffer and the amount of data remaining, this buffer
@@ -730,6 +722,5 @@ impl Encoder<Bytes> for Codec {
     Ok(())
   }
 }
-
 
 // vim: set ft=rust et sw=2 ts=2 sts=2 cinoptions=2 tw=79 :
