@@ -1,6 +1,6 @@
 [package]
 name = "tokio-ddmw"
-version = "0.6.0"
+version = "0.7.0"
 authors = ["Jan Danielsson <jan.danielsson@qrnch.com>"]
 edition = "2018"
 license = "0BSD"
@@ -9,7 +9,7 @@ repository = "https://github.com/openqrnch/tokio-ddmw"
 description = "Library for integrating clients against DDMW."
 
 [dependencies]
-blather = { version = "0.4", features = ["bytes"] }
+blather = { version = "0.5" }
 bytes = { version = "0.5" }
 futures = { version = "0.3" }
 tokio = { version = "0.2", features = ["net", "macros", "io-util"] }

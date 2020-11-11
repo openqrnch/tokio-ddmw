@@ -12,7 +12,9 @@ pub enum Error {
   SerializeError(String),
   ServerError(Params),
   BadState(String),
-  InvalidSize(String)
+  InvalidSize(String),
+  InvalidCredentials,
+  Disconnected
 }
 
 impl std::error::Error for Error {}
@@ -28,7 +30,9 @@ impl fmt::Display for Error {
       Error::BadState(s) => {
         write!(f, "Encountred an unexpected/bad state: {}", s)
       }
-      Error::InvalidSize(s) => write!(f, "Invalid size; {}", s)
+      Error::InvalidSize(s) => write!(f, "Invalid size; {}", s),
+      Error::InvalidCredentials => write!(f, "Invalid credentials"),
+      Error::Disconnected => write!(f, "Disconnected")
     }
   }
 }
