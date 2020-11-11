@@ -13,7 +13,7 @@ use tokio_util::codec::Framed;
 
 use blather::{codec, Telegram};
 
-use err::Error;
+pub use err::Error;
 
 
 /// Send a telegram and wait for a reply.
