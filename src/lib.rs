@@ -65,6 +65,7 @@ pub struct DDLinkInfo {
 
 #[derive(Debug)]
 pub struct NodeInfo {
+  version: String,
   nodetype: ddmw_types::node::Type,
   ddlnk: DDLinkInfo
 }
@@ -84,6 +85,13 @@ pub async fn get_nodeinfo<T: AsyncRead + AsyncWrite + Unpin>(
   let nodetype = match nodetype {
     Ok(nt) => nt,
     Err(_) => return Err(Error::UnknownData("Unknown node type".to_string()))
+  };
+
+  let version = match params.get_str("ddmw.version") {
+    Some(s) => s.to_string(),
+    None => {
+      return Err(Error::MissingData("ddmw.version not found".to_string()))
+    }
   };
 
   let engine = match params.get_str("ddmw.ddlink.engine") {
@@ -124,6 +132,7 @@ pub async fn get_nodeinfo<T: AsyncRead + AsyncWrite + Unpin>(
   };
 
   Ok(NodeInfo {
+    version,
     nodetype,
     ddlnk: DDLinkInfo {
       engine,
