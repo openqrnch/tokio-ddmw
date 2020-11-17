@@ -57,17 +57,17 @@ pub async fn expect_okfail<T: AsyncRead + AsyncWrite + Unpin>(
 
 #[derive(Debug)]
 pub struct DDLinkInfo {
-  engine: String,
-  protocol: ddmw_types::node::ddlnk::Protocol,
-  protimpl: ddmw_types::node::ddlnk::ProtImpl
+  pub engine: String,
+  pub protocol: ddmw_types::node::ddlnk::Protocol,
+  pub protimpl: ddmw_types::node::ddlnk::ProtImpl
 }
 
 
 #[derive(Debug)]
 pub struct NodeInfo {
-  version: String,
-  nodetype: ddmw_types::node::Type,
-  ddlnk: DDLinkInfo
+  pub version: String,
+  pub nodetype: ddmw_types::node::Type,
+  pub ddlnk: DDLinkInfo
 }
 
 
