@@ -14,7 +14,9 @@ pub enum Error {
   BadState(String),
   InvalidSize(String),
   InvalidCredentials,
-  Disconnected
+  Disconnected,
+  MissingData(String),
+  UnknownData(String)
 }
 
 impl std::error::Error for Error {}
@@ -32,7 +34,9 @@ impl fmt::Display for Error {
       }
       Error::InvalidSize(s) => write!(f, "Invalid size; {}", s),
       Error::InvalidCredentials => write!(f, "Invalid credentials"),
-      Error::Disconnected => write!(f, "Disconnected")
+      Error::Disconnected => write!(f, "Disconnected"),
+      Error::MissingData(s) => write!(f, "Missing data; {}", s),
+      Error::UnknownData(s) => write!(f, "Unknown data; {}", s)
     }
   }
 }
