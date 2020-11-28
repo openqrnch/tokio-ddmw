@@ -6,6 +6,7 @@ use tokio_util::codec::Framed;
 
 use crate::Error;
 
+#[derive(Debug)]
 pub struct Account {
   pub id: i64,
   pub name: String,
