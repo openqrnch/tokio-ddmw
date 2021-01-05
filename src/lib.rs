@@ -1,5 +1,9 @@
 //! Utility library for creating integrations against the Data Diode
 //! Middleware.
+//!
+//! This library provides low level functions to perform arbitrary calls
+//! to the server nodes as well as a few high-level helper functions that are
+//! built on top of the low level functions.
 
 pub mod auth;
 pub mod err;
@@ -15,6 +19,20 @@ use tokio_util::codec::Framed;
 use blather::{codec, Telegram};
 
 pub use err::Error;
+
+
+/// Reference an account; with the option to implicitly reference self.
+pub enum OptObjRef {
+  Current,
+  Id(i64),
+  Name(String)
+}
+
+/// Explicitly reference an account, either by numeric identifier or name.
+pub enum ObjRef {
+  Id(i64),
+  Name(String)
+}
 
 
 /// Send a telegram and wait for a reply.
