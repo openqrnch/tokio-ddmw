@@ -12,7 +12,8 @@ pub mod mgmt;
 use futures::sink::SinkExt;
 
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::stream::StreamExt;
+
+use tokio_stream::StreamExt;
 
 use tokio_util::codec::Framed;
 
