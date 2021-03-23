@@ -1,6 +1,6 @@
 [package]
 name = "tokio-ddmw"
-version = "0.9.0"
+version = "0.9.1"
 authors = ["Jan Danielsson <jan.danielsson@qrnch.com>"]
 edition = "2018"
 license = "0BSD"
@@ -10,10 +10,10 @@ description = "Utility library for integrating clients against DDMW."
 
 [dependencies]
 blather = { version = "0.7" }
-bytes = { version = "1.0.0" }
+bytes = { version = "1" }
 ddmw-types = { version = "0.1" }
 futures = { version = "0.3" }
-tokio = { version = "1.0.0" }
+tokio = { version = "1" }
 tokio-stream = { version = "0.1" }
 tokio-util = { version= "0.6" }
 

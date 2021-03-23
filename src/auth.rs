@@ -18,11 +18,20 @@ pub enum Token {
 }
 
 pub struct AuthInfo {
-  accpass: Option<(String, String)>,
-  itkn: Option<Token>,
-  otkn: Option<PathBuf>
+  pub accpass: Option<(String, String)>,
+  pub itkn: Option<Token>,
+  pub otkn: Option<PathBuf>
 }
 
+impl AuthInfo {
+  pub fn from_accpass(accname: String, pass: String) -> Self {
+    AuthInfo {
+      accpass: Some((accname, pass)),
+      itkn: None,
+      otkn: None
+    }
+  }
+}
 
 /// Attempt to authenticate using an authentication token.
 /// The token is either loaded from a file or stored in memory as a string.
