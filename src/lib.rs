@@ -8,6 +8,7 @@
 pub mod auth;
 pub mod err;
 pub mod mgmt;
+pub mod msg;
 
 use futures::sink::SinkExt;
 
