@@ -2,7 +2,10 @@ use std::fs;
 use std::path::PathBuf;
 
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::{TcpStream, UnixStream};
+use tokio::net::TcpStream;
+
+#[cfg(unix)]
+use tokio::net::UnixStream;
 
 use tokio_util::codec::Framed;
 
@@ -24,6 +27,8 @@ pub enum InputType {
 
 pub enum Endpoint {
   TcpSockAddr(String),
+
+  #[cfg(unix)]
   UdsPath(PathBuf)
 }
 
@@ -58,6 +63,7 @@ pub async fn connsend(
       }
       send(&mut framed, &Transport { ch: xfer.ch }, mi).await
     }
+    #[cfg(unix)]
     Endpoint::UdsPath(sa) => {
       let stream = UnixStream::connect(sa).await?;
       let mut framed = Framed::new(stream, blather::Codec::new());

@@ -9,14 +9,20 @@ use tokio_util::codec::Framed;
 
 use blather::Telegram;
 
+use crate::utils;
 use crate::Error;
 
-
+/// Used to choose where an authentication token is fetched from.
+#[derive(Clone)]
 pub enum Token {
+  /// Token is stored in a string.
   Buf(String),
+
+  /// Token is stored in a file.
   File(PathBuf)
 }
 
+#[derive(Clone)]
 pub struct AuthInfo {
   pub accpass: Option<(String, String)>,
   pub itkn: Option<Token>,
@@ -32,6 +38,88 @@ impl AuthInfo {
     }
   }
 }
+
+
+impl From<&AuthInfo> for AuthInfo {
+  fn from(ai: &AuthInfo) -> AuthInfo {
+    ai.clone()
+  }
+}
+
+
+impl From<ddmw_util::app::Config> for AuthInfo {
+  fn from(cfg: ddmw_util::app::Config) -> AuthInfo {
+    AuthInfo::from(&cfg)
+  }
+}
+
+
+impl From<&ddmw_util::app::Config> for AuthInfo {
+  fn from(cfg: &ddmw_util::app::Config) -> AuthInfo {
+    if let Some(ref auth) = cfg.auth {
+      AuthInfo::from(auth)
+    } else {
+      AuthInfo {
+        accpass: None,
+        itkn: None,
+        otkn: None
+      }
+    }
+  }
+}
+
+
+impl From<&ddmw_util::app::Auth> for AuthInfo {
+  fn from(auth: &ddmw_util::app::Auth) -> AuthInfo {
+    // Attempt to get account name and passphrase (from file, if not set
+    // explictly).
+    let accpass = match &auth.name {
+      Some(name) => {
+        // Got an account name, see if there's a passphrase.
+        if let Some(ref pass) = auth.pass {
+          // Got a raw passphrase -- use it
+          Some((name.clone(), pass.clone()))
+        } else if let Some(ref fname) = auth.pass_file {
+          // No raw passphrase, attempt to load from file
+          if let Some(pass) = utils::read_single_line(fname) {
+            Some((name.to_string(), pass.to_string()))
+          } else {
+            None
+          }
+        } else {
+          None
+        }
+      }
+      None => None
+    };
+
+    // Attempt to get token (if not raw, then a filename to one)
+    let itkn = if let Some(ref tkn) = auth.token {
+      Some(Token::Buf(tkn.to_string()))
+    } else if let Some(ref tknfile) = auth.token_file {
+      Some(Token::File(PathBuf::from(tknfile)))
+    } else {
+      None
+    };
+
+    // If a token filename was specified, then use it as the output token
+    // filename as well.  This will cause the authenticate() to, if
+    // authenticating using username and passphrase, to request an authtoken
+    // and save it to this file.
+    let otkn = if let Some(Token::File(ref fname)) = itkn {
+      Some(fname.to_path_buf())
+    } else {
+      None
+    };
+
+    AuthInfo {
+      accpass,
+      itkn,
+      otkn
+    }
+  }
+}
+
 
 /// Attempt to authenticate using an authentication token.
 /// The token is either loaded from a file or stored in memory as a string.

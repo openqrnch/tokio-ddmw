@@ -10,6 +10,8 @@ pub mod err;
 pub mod mgmt;
 pub mod msg;
 
+mod utils;
+
 use futures::sink::SinkExt;
 
 use tokio::io::{AsyncRead, AsyncWrite};
